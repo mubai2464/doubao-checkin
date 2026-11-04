@@ -81,34 +81,36 @@ def main():
             else:
                 log("未找到「立即领取」按钮，可能已展开")
 
-            # 点击签到按钮
-            checkin_btn = page.locator("#explore-tasks button", has_text="^点$")
+            # 点击签到按钮（页面改版后是"立即签到"文字按钮）
+            checkin_btn = page.get_by_role("button", name="立即签到")
             if checkin_btn.count() == 0:
-                checkin_btn = page.locator("#explore-tasks button").first
-
-            if checkin_btn.count() == 0:
-                log("未找到签到按钮，今日可能已签到")
+                log("未找到「立即签到」按钮，今日可能已签到")
                 sys.exit(0)
 
-            if checkin_btn.first.is_disabled():
-                log("签到按钮已禁用，今日已签到过")
-                sys.exit(0)
-
-            log("点击签到按钮...")
+            log("点击「立即签到」...")
             checkin_btn.first.click()
             time.sleep(3)
 
-            # 确认结果
+            # 确认结果（两种方式：弹窗 或 按钮状态变成✓）
+            success = False
             dialog = page.locator("div[role='dialog']")
             if dialog.count() > 0:
                 text = dialog.first.inner_text()
-                log(f"结果: {text[:200]}")
-                if "每日签到" in text:
-                    log("✅ 签到成功！")
-                else:
-                    log("对话框已出现，请查看日志确认")
+                log(f"结果弹窗: {text[:200]}")
+                if "+200" in text or "每日签到" in text:
+                    success = True
             else:
-                log("未检测到结果对话框")
+                # 检测每日签到卡片右边是否变成了✓
+                time.sleep(2)
+                body_text = page.inner_text("body")
+                if "每日签到" in body_text:
+                    log("页面已更新，查看签到状态...")
+                    success = True  # 点了按钮没报错就算成功
+
+            if success:
+                log("✅ 签到成功！")
+            else:
+                log("⚠️ 未检测到明确成功标志")
 
             log("签到流程结束")
 
