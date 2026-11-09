@@ -4,6 +4,7 @@
 """
 import base64
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -41,6 +42,18 @@ def dump_page(page, tag: str):
         page.screenshot(path=f"/tmp/checkin_{tag}.png", full_page=False)
     except Exception:
         pass
+
+
+def read_balance(page):
+    """从页面文本解析「累计获得额度：N 点」，用于确证签到是否真的生效。"""
+    try:
+        body = page.inner_text("body")
+    except Exception:
+        return None
+    m = re.search(r"累计获得额度[：:]\s*\n?\s*([0-9]+)", body)
+    if not m:
+        m = re.search(r"累计获得额度[^0-9]{0,10}([0-9]+)", body)
+    return int(m.group(1)) if m else None
 
 
 def wait_task_area(page, timeout_s: int) -> bool:
@@ -133,6 +146,9 @@ def main():
                 except Exception as e:
                     log(f"点击「立即领取」失败（继续尝试）: {e}")
 
+            before_balance = read_balance(page)
+            log(f"签到前累计额度: {before_balance}")
+
             # 等签到按钮出现（最多 30 秒）
             found = False
             for _ in range(20):
@@ -142,11 +158,11 @@ def main():
                 page.wait_for_timeout(1500)
 
             if not found:
-                if card.count() > 0:
-                    log("任务卡片存在但没有「立即签到」按钮 → 今日已签到，跳过")
+                if card.count() > 0 and before_balance is not None:
+                    log(f"任务卡片存在但没有「立即签到」按钮，额度可读（{before_balance}）→ 今日已签到，跳过")
                     dump_page(page, "already")
                     sys.exit(0)
-                log("ERROR: 未找到「立即签到」按钮，且任务卡片也不存在")
+                log("ERROR: 找不到「立即签到」按钮，也无法读取额度，状态不明（不再默认当作已签到）")
                 dump_page(page, "no_button")
                 sys.exit(1)
 
@@ -159,28 +175,31 @@ def main():
             sign_btn.first.click(timeout=15000)
             page.wait_for_timeout(4000)
 
-            # 成功判定：弹窗出现，或签到按钮消失
+            # 成功判定：以「累计额度是否真的增加」为准，弹窗/按钮消失只作辅助证据
             success = False
+            after_balance = None
+            for _ in range(15):
+                page.wait_for_timeout(1000)
+                after_balance = read_balance(page)
+                if before_balance is not None and after_balance is not None and after_balance > before_balance:
+                    success = True
+                    break
+
             dialog = page.locator("div[role='dialog']")
             if dialog.count() > 0:
-                text = dialog.first.inner_text()
-                log(f"结果弹窗: {text[:200]}")
-                if "额度" in text or "签到" in text:
-                    success = True
+                log(f"结果弹窗: {dialog.first.inner_text()[:200]}")
 
-            if not success:
-                page.wait_for_timeout(5000)
-                if sign_btn.count() == 0:
-                    success = True
-                    log("「立即签到」按钮已消失，判定签到成功")
+            log(f"签到后累计额度: {after_balance}")
 
             dump_page(page, "after_click")
 
             if success:
-                log("✅ 签到成功，额度已到账")
+                log(f"✅ 签到成功，额度增加 {after_balance - before_balance} 点（{before_balance} → {after_balance}）")
                 sys.exit(0)
 
-            log("ERROR: 点击后签到状态未变化")
+            if sign_btn.count() == 0:
+                log("⚠️ 按钮已消失但额度未增加，结果不确定 → 按失败处理")
+            log("ERROR: 点击后额度没有增加，签到未生效")
             sys.exit(1)
 
         except SystemExit:
