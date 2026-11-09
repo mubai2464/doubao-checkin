@@ -114,7 +114,14 @@ def main():
                 dump_page(page, f"not_ready_{attempt}")
 
             if not ready:
-                log("ERROR: 3 次尝试后仍无法加载任务区（页面被风控或渲染失败）")
+                try:
+                    body = page.inner_text("body")
+                except Exception:
+                    body = ""
+                if "该页面暂时不可用" in body or "请尝试刷新此页面" in body:
+                    log("SKIP: IP_BLOCKED 页面被风控拦截（该页面暂时不可用），本轮放弃")
+                else:
+                    log("ERROR: 3 次尝试后仍无法加载任务区")
                 sys.exit(1)
 
             # 任务区没展开时先点「立即领取」
