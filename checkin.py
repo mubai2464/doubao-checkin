@@ -60,64 +60,99 @@ def main():
 
         try:
             log("打开签到页面...")
-            page.goto(CHECKIN_URL, wait_until="domcontentloaded", timeout=30000)
-            time.sleep(5)
+            page.goto(CHECKIN_URL, wait_until="load", timeout=60000)
+            page.wait_for_timeout(3000)
 
-            # 检测登录状态
-            body_text = page.inner_text("body")
-            if "登录" in body_text and "立即领取" not in body_text:
-                log("ERROR: 登录态已失效，请更新 STORAGE_STATE_B64 Secret")
-                page.screenshot(path="/tmp/failed.png")
+            # 登录失效检测（只在明确跳到登录页时判定）
+            if "/login" in page.url:
+                log("ERROR: 登录态已失效（跳转到登录页），请更新 STORAGE_STATE_B64 Secret")
+                page.screenshot(path="/tmp/checkin_login_page.png")
                 sys.exit(1)
 
-            log("页面加载成功")
+            log(f"页面已打开: {page.url}")
 
-            # 点击"立即领取"
-            claim = page.get_by_role("button", name="立即领取")
-            if claim.count() > 0:
-                log("点击「立即领取」...")
-                claim.first.click()
-                time.sleep(2)
-            else:
-                log("未找到「立即领取」按钮，可能已展开")
+            sign_btn = page.get_by_role("button", name="立即签到")
+            claim_btn = page.get_by_role("button", name="立即领取")
+            card = page.get_by_text("每日签到")
 
-            # 点击签到按钮（页面改版后是"立即签到"文字按钮）
-            checkin_btn = page.get_by_role("button", name="立即签到")
-            if checkin_btn.count() == 0:
-                log("未找到「立即签到」按钮，今日可能已签到")
-                sys.exit(0)
+            # 等待任务区渲染（页面是懒加载，最多等 40 秒）
+            ready = False
+            for _ in range(20):
+                if sign_btn.count() > 0 or card.count() > 0 or claim_btn.count() > 0:
+                    ready = True
+                    break
+                page.wait_for_timeout(2000)
+            if not ready:
+                log("ERROR: 40 秒内签到页未渲染出任务区")
+                page.screenshot(path="/tmp/checkin_not_loaded.png")
+                sys.exit(1)
+
+            # 任务区未展开时先点「立即领取」
+            if claim_btn.count() > 0:
+                try:
+                    claim_btn.first.click(timeout=10000)
+                    log("已点击「立即领取」，展开任务区")
+                except Exception as e:
+                    log(f"点击「立即领取」失败（继续尝试）: {e}")
+                page.wait_for_timeout(2000)
+
+            # 等待签到按钮出现（最多 30 秒）
+            found = False
+            for _ in range(15):
+                if sign_btn.count() > 0:
+                    found = True
+                    break
+                page.wait_for_timeout(2000)
+
+            if not found:
+                # 区分「今日已签到」和「页面异常」
+                if card.count() > 0:
+                    log("任务卡片存在但没有「立即签到」按钮 → 今日已签到")
+                    page.screenshot(path="/tmp/checkin_already.png")
+                    sys.exit(0)
+                log("ERROR: 未找到「立即签到」按钮，且任务卡片也不存在")
+                page.screenshot(path="/tmp/checkin_no_button.png")
+                sys.exit(1)
+
+            try:
+                sign_btn.first.scroll_into_view_if_needed(timeout=5000)
+            except Exception:
+                pass
 
             log("点击「立即签到」...")
-            checkin_btn.first.click()
-            time.sleep(3)
+            sign_btn.first.click(timeout=15000)
+            page.wait_for_timeout(4000)
 
-            # 确认结果（两种方式：弹窗 或 按钮状态变成✓）
+            # 判定成功：弹窗出现 / 按钮消失
             success = False
             dialog = page.locator("div[role='dialog']")
             if dialog.count() > 0:
                 text = dialog.first.inner_text()
                 log(f"结果弹窗: {text[:200]}")
-                if "+200" in text or "每日签到" in text:
+                if "额度" in text or "签到" in text:
                     success = True
-            else:
-                # 检测每日签到卡片右边是否变成了✓
-                time.sleep(2)
-                body_text = page.inner_text("body")
-                if "每日签到" in body_text:
-                    log("页面已更新，查看签到状态...")
-                    success = True  # 点了按钮没报错就算成功
+
+            if not success:
+                page.wait_for_timeout(4000)
+                if page.get_by_role("button", name="立即签到").count() == 0:
+                    success = True
+                    log("「立即签到」按钮已消失")
+
+            page.screenshot(path="/tmp/checkin_after_click.png")
 
             if success:
-                log("✅ 签到成功！")
-            else:
-                log("⚠️ 未检测到明确成功标志")
+                log("✅ 签到成功，+200 额度")
+                sys.exit(0)
 
-            log("签到流程结束")
+            log("ERROR: 点击后签到状态未变化")
+            sys.exit(1)
 
+        except SystemExit:
+            raise
         except Exception as e:
             log(f"❌ 签到异常: {type(e).__name__}: {e}")
             try:
-                page.screenshot(path="/tmp/error.png")
+                page.screenshot(path="/tmp/checkin_error.png")
             except Exception:
                 pass
             sys.exit(1)

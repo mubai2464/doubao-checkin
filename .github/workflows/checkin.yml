@@ -4,6 +4,8 @@ on:
   schedule:
     # 每天北京时间 7:30 = UTC 23:30（前一天）
     - cron: "30 23 * * *"
+    # 兜底一次：北京 9:30 = UTC 1:30（脚本幂等，已签到会自动跳过）
+    - cron: "30 1 * * *"
   workflow_dispatch:  # 支持手动触发
 
 jobs:
@@ -28,9 +30,10 @@ jobs:
           STORAGE_STATE_B64: ${{ secrets.STORAGE_STATE_B64 }}
         run: python checkin.py
 
-      - name: Upload screenshot on failure
-        if: failure()
+      - name: Upload screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshot-${{ github.run_id }}
-          path: /tmp/*.png
+          name: screenshots-${{ github.run_id }}
+          path: /tmp/checkin*.png
+          if-no-files-found: ignore
